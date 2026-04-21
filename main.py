@@ -1,6 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from database import engine
+from models import Base
+from database import SessionLocal
+from models import Building
+from schemas import BuildingCreate
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 app.add_middleware(
@@ -50,4 +56,62 @@ def root():
 
 @app.get("/buildings")
 def get_buildings():
-    return buildings
+    db = SessionLocal()
+    try:
+        return db.query(Building).all()
+    finally:
+        db.close()
+
+@app.get("/buildings/{id}")
+def get_building(id: int):
+    db = SessionLocal()
+    try:
+        return db.get(Building, id)
+    finally:
+        db.close()        
+
+@app.post("/buildings")
+def create_building(b: BuildingCreate):
+    db = SessionLocal()
+    try:
+        new = Building(
+            name=b.name,
+            lat=b.lat,
+            lng=b.lng,
+            energy=b.energy
+        )
+        db.add(new)
+        db.commit()
+        db.refresh(new)
+        return new
+    finally:
+        db.close()
+
+@app.put("/buildings/{id}")
+def update_building(id: int, b: dict):
+    db = SessionLocal()
+    try:
+        building = db.get(Building, id)
+
+        building.name = b["name"]
+        building.energy = b["energy"]
+
+        db.commit()
+        db.refresh(building)
+
+        return building
+    finally:
+        db.close()
+
+@app.delete("/buildings/{id}")
+def delete_building(id: int):
+    db = SessionLocal()
+    try:
+        building = db.get(Building, id)
+
+        db.delete(building)
+        db.commit()
+
+        return {"ok": True}
+    finally:
+        db.close()
