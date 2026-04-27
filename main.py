@@ -1,18 +1,82 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from database import engine
-from models import Base
-from database import SessionLocal
-from models import Building
-from schemas import BuildingCreate
+from contextlib import asynccontextmanager
+from sqlalchemy.orm import Session
+
+from database import Base, engine, SessionLocal
+from models.building import Building
+from models.energy_log import EnergyLog
+from schemas.energy_log import EnergyLogCreate
+from schemas.building import BuildingCreate, BuildingOut
+
+import random
+from datetime import datetime, timedelta
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    seed_data()
+    seed_logs()
+    yield
+app = FastAPI(lifespan=lifespan)
+
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI()
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def seed_data():
+    db = SessionLocal()
+
+    if db.query(Building).count() == 0:
+        db.add_all([
+            Building(name="Hospital Lleida", lat=41.615, lng=0.63, energy=1200),
+            Building(name="School Lleida", lat=41.62, lng=0.61, energy=800),
+            Building(name="Library Lleida", lat=41.618, lng=0.625, energy=500),
+            Building(name="University Campus", lat=41.61, lng=0.62, energy=1500),
+            Building(name="City Hall", lat=41.617, lng=0.621, energy=900),
+            Building(name="Sports Center", lat= 41.619, lng= 0.635, energy=700),
+
+        ])
+        db.commit()
+
+    db.close()
+
+def seed_logs():
+    db = SessionLocal()
+    try:
+        if db.query(EnergyLog).count() == 0:
+            buildings = db.query(Building).all()
+
+            logs = []
+            for b in buildings:
+                for i in range(10):
+                    logs.append(
+                        EnergyLog(
+                            energy=random.randint(400, 1500),
+                            timestamp=datetime.utcnow() - timedelta(hours=i, minutes=random.randint(0, 59)),
+                            building_id=b.id
+                        )
+                    )
+
+            db.bulk_save_objects(logs)  
+            db.commit()
+
+    except Exception as e:
+        db.rollback()
+        raise e
+
+    finally:
+        db.close()
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://energy-dashboard-app.netlify.app"
+        "http://localhost:4200","https://energy-dashboard-app.netlify.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -24,13 +88,7 @@ app.add_middleware(
 def favicon():
     return FileResponse("favicon.ico")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
 
 buildings = [
     {"name": "Hospital Lleida", "lat": 41.615, "lng": 0.63, "energy": 1200},
@@ -55,24 +113,21 @@ def root():
     return {"message": "Energy API running 🚀"}
 
 @app.get("/buildings")
-def get_buildings():
-    db = SessionLocal()
+def get_buildings(db: Session = Depends(get_db)):
     try:
         return db.query(Building).all()
     finally:
         db.close()
 
 @app.get("/buildings/{id}")
-def get_building(id: int):
-    db = SessionLocal()
+def get_building(id: int, db: Session = Depends(get_db)):
     try:
         return db.get(Building, id)
     finally:
-        db.close()        
+        db.close()
 
 @app.post("/buildings")
-def create_building(b: BuildingCreate):
-    db = SessionLocal()
+def create_building(b: BuildingCreate, db: Session = Depends(get_db)):
     try:
         new = Building(
             name=b.name,
@@ -88,13 +143,12 @@ def create_building(b: BuildingCreate):
         db.close()
 
 @app.put("/buildings/{id}")
-def update_building(id: int, b: dict):
-    db = SessionLocal()
+def update_building(id: int, b: BuildingCreate, db: Session = Depends(get_db)):
     try:
         building = db.get(Building, id)
 
-        building.name = b["name"]
-        building.energy = b["energy"]
+        building.name = b.name
+        building.energy = b.energy
 
         db.commit()
         db.refresh(building)
@@ -104,8 +158,7 @@ def update_building(id: int, b: dict):
         db.close()
 
 @app.delete("/buildings/{id}")
-def delete_building(id: int):
-    db = SessionLocal()
+def delete_building(id: int, db: Session = Depends(get_db)):
     try:
         building = db.get(Building, id)
 
@@ -115,3 +168,25 @@ def delete_building(id: int):
         return {"ok": True}
     finally:
         db.close()
+
+@app.post("/energy")
+def create_log(log: EnergyLogCreate, db: Session = Depends(get_db)):
+    try:
+        new_log = EnergyLog(**log.dict())
+
+        db.add(new_log)
+        db.commit()
+        db.refresh(new_log)
+
+        return new_log
+    finally:
+        db.close()
+
+@app.get("/buildings/{id}/energy")
+def get_energy_logs(id: int, db: Session = Depends(get_db)):
+    try:
+        return db.query(EnergyLog).filter(EnergyLog.building_id == id).all()
+    finally:
+        db.close()
+
+
